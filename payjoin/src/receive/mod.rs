@@ -417,7 +417,7 @@ impl WantsInputs {
     /// Proper coin selection allows payjoin to resemble ordinary transactions.
     /// To ensure the resemblance, a number of heuristics must be avoided.
     ///
-    /// UIH "Unnecessary input heuristic" is avoided for multi-output transactions.
+    /// UIH "Unnecessary input heuristic" is avoided for two-output transactions.
     /// A simple consolidation is otherwise chosen if available.
     pub fn try_preserving_privacy(
         &self,
@@ -428,16 +428,41 @@ impl WantsInputs {
         }
 
         if self.payjoin_psbt.outputs.len() > 2 {
-            // This UIH avoidance function supports only
-            // many-input, n-output transactions such that n <= 2 for now
-            return Err(SelectionError::from(InternalSelectionError::TooManyOutputs));
-        }
-
-        if self.payjoin_psbt.outputs.len() == 2 {
+            // This doesn't attempt to preserve privacy...
+            self.do_coin_selection(candidate_inputs)
+        } else if self.payjoin_psbt.outputs.len() == 2 {
             self.avoid_uih(candidate_inputs)
         } else {
             self.select_first_candidate(candidate_inputs)
         }
+    }
+
+    fn do_coin_selection(
+        &self,
+        candidate_inputs: HashMap<Amount, OutPoint>,
+    ) -> Result<Vec<OutPoint>, SelectionError> {
+        // Calculate the amount that the receiver must contribute
+        let output_amount =
+            self.payjoin_psbt.unsigned_tx.output.iter().fold(0, |acc, output| acc + output.value);
+        let original_output_amount =
+            self.original_psbt.unsigned_tx.output.iter().fold(0, |acc, output| acc + output.value);
+        let min_input_amount = min(0, output_amount - original_output_amount);
+
+        // Select inputs that can pay for that amount
+        // TODO: use a better coin selection algorithm
+        let mut selected_coins = vec![];
+        let mut input_sats = 0;
+        for candidate in candidate_inputs {
+            let candidate_sats = candidate.0.to_sat();
+            selected_coins.push(candidate.1);
+            input_sats += candidate_sats;
+
+            if input_sats >= min_input_amount {
+                return Ok(selected_coins);
+            }
+        }
+
+        Err(SelectionError::from(InternalSelectionError::CannotAfford))
     }
 
     /// UIH "Unnecessary input heuristic" is one class of heuristics to avoid. We define

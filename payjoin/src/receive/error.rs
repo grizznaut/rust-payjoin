@@ -211,6 +211,8 @@ pub(crate) enum InternalSelectionError {
     TooManyOutputs,
     /// No selection candidates improve privacy
     NotFound,
+    /// Cannot afford the transaction cost with available inputs
+    CannotAfford,
 }
 
 impl fmt::Display for SelectionError {
@@ -223,6 +225,8 @@ impl fmt::Display for SelectionError {
             ),
             InternalSelectionError::NotFound =>
                 write!(f, "No selection candidates improve privacy"),
+            InternalSelectionError::CannotAfford =>
+                write!(f, "Cannot afford the transaction cost with available inputs"),
         }
     }
 }
