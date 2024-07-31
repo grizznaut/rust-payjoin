@@ -422,7 +422,7 @@ impl WantsInputs {
     pub fn try_preserving_privacy(
         &self,
         candidate_inputs: HashMap<Amount, OutPoint>,
-    ) -> Result<OutPoint, SelectionError> {
+    ) -> Result<Vec<OutPoint>, SelectionError> {
         if candidate_inputs.is_empty() {
             return Err(SelectionError::from(InternalSelectionError::Empty));
         }
@@ -448,7 +448,7 @@ impl WantsInputs {
     fn avoid_uih(
         &self,
         candidate_inputs: HashMap<Amount, OutPoint>,
-    ) -> Result<OutPoint, SelectionError> {
+    ) -> Result<Vec<OutPoint>, SelectionError> {
         let min_original_out_sats = self
             .payjoin_psbt
             .unsigned_tx
@@ -475,7 +475,7 @@ impl WantsInputs {
             if candidate_min_in > candidate_min_out {
                 // The candidate avoids UIH2 but conforms to UIH1: Optimal change heuristic.
                 // It implies the smallest output is the sender's change address.
-                return Ok(candidate.1);
+                return Ok(vec![candidate.1]);
             }
         }
 
@@ -486,12 +486,11 @@ impl WantsInputs {
     fn select_first_candidate(
         &self,
         candidate_inputs: HashMap<Amount, OutPoint>,
-    ) -> Result<OutPoint, SelectionError> {
-        candidate_inputs
-            .values()
-            .next()
-            .cloned()
-            .ok_or_else(|| SelectionError::from(InternalSelectionError::NotFound))
+    ) -> Result<Vec<OutPoint>, SelectionError> {
+        match candidate_inputs.values().next().cloned() {
+            Some(outpoint) => Ok(vec![outpoint]),
+            None => Err(SelectionError::from(InternalSelectionError::NotFound)),
+        }
     }
 
     pub fn contribute_witness_input(self, txo: TxOut, outpoint: OutPoint) -> ProvisionalProposal {

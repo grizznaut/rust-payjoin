@@ -430,7 +430,7 @@ impl WantsInputs {
     pub fn try_preserving_privacy(
         &self,
         candidate_inputs: HashMap<Amount, OutPoint>,
-    ) -> Result<OutPoint, SelectionError> {
+    ) -> Result<Vec<OutPoint>, SelectionError> {
         self.inner.try_preserving_privacy(candidate_inputs)
     }
 
