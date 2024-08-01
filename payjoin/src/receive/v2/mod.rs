@@ -428,14 +428,17 @@ impl WantsInputs {
     // if min(in) > min(out) then UIH1 else UIH2
     // https://eprint.iacr.org/2022/589.pdf
     pub fn try_preserving_privacy(
-        &self,
+        &mut self,
         candidate_inputs: HashMap<Amount, OutPoint>,
     ) -> Result<Vec<OutPoint>, SelectionError> {
         self.inner.try_preserving_privacy(candidate_inputs)
     }
 
-    pub fn contribute_witness_input(self, txo: TxOut, outpoint: OutPoint) -> ProvisionalProposal {
-        let inner = self.inner.contribute_witness_input(txo, outpoint);
+    pub fn contribute_witness_inputs(
+        self,
+        inputs: HashMap<OutPoint, TxOut>,
+    ) -> ProvisionalProposal {
+        let inner = self.inner.contribute_witness_inputs(inputs);
         ProvisionalProposal { inner, context: self.context }
     }
 

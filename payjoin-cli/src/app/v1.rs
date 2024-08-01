@@ -337,7 +337,7 @@ impl App {
 }
 
 fn try_contributing_inputs(
-    payjoin: payjoin::receive::WantsInputs,
+    mut payjoin: payjoin::receive::WantsInputs,
     bitcoind: &bitcoincore_rpc::Client,
 ) -> Result<payjoin::receive::ProvisionalProposal> {
     use bitcoin::OutPoint;
@@ -350,17 +350,18 @@ fn try_contributing_inputs(
         .map(|i| (i.amount, OutPoint { txid: i.txid, vout: i.vout }))
         .collect();
 
-    let selected_outpoint = payjoin.try_preserving_privacy(candidate_inputs).expect("gg")[0];
-    let selected_utxo = available_inputs
-        .iter()
-        .find(|i| i.txid == selected_outpoint.txid && i.vout == selected_outpoint.vout)
-        .context("This shouldn't happen. Failed to retrieve the privacy preserving utxo from those we provided to the seclector.")?;
-    log::debug!("selected utxo: {:#?}", selected_utxo);
+    let selected_outpoints = payjoin.try_preserving_privacy(candidate_inputs).expect("gg");
 
-    //  calculate receiver payjoin outputs given receiver payjoin inputs and original_psbt,
-    let txo_to_contribute = bitcoin::TxOut {
-        value: selected_utxo.amount,
-        script_pubkey: selected_utxo.script_pub_key.clone(),
-    };
-    Ok(payjoin.contribute_witness_input(txo_to_contribute, selected_outpoint))
+    let mut selected_inputs = HashMap::new();
+    for outpoint in selected_outpoints {
+        let utxo = available_inputs
+        .iter()
+        .find(|i| i.txid == outpoint.txid && i.vout == outpoint.vout)
+        .context("This shouldn't happen. Failed to retrieve the privacy preserving utxo from those we provided to the selector.")?;
+        let txo = bitcoin::TxOut { value: utxo.amount, script_pubkey: utxo.script_pub_key.clone() };
+        selected_inputs.insert(outpoint, txo);
+    }
+    log::debug!("selected inputs: {:#?}", selected_inputs);
+
+    Ok(payjoin.contribute_witness_inputs(selected_inputs))
 }

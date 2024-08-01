@@ -149,7 +149,7 @@ mod integration {
                 })
                 .expect("Receiver should have at least one output");
 
-            let payjoin = payjoin
+            let mut payjoin = payjoin
                 .try_substitute_receiver_output(|| {
                     Ok(receiver
                         .get_new_address(None, None)
@@ -166,23 +166,24 @@ mod integration {
                 .map(|i| (i.amount, OutPoint { txid: i.txid, vout: i.vout }))
                 .collect();
 
-            let selected_outpoint =
-                payjoin.try_preserving_privacy(candidate_inputs).expect("gg")[0];
-            let selected_utxo = available_inputs
-                .iter()
-                .find(|i| i.txid == selected_outpoint.txid && i.vout == selected_outpoint.vout)
-                .unwrap();
+            let selected_outpoints = payjoin.try_preserving_privacy(candidate_inputs).expect("gg");
 
-            //  calculate receiver payjoin outputs given receiver payjoin inputs and original_psbt,
-            let txo_to_contribute = bitcoin::TxOut {
-                value: selected_utxo.amount,
-                script_pubkey: selected_utxo.script_pub_key.clone(),
-            };
-            let outpoint_to_contribute =
-                bitcoin::OutPoint { txid: selected_utxo.txid, vout: selected_utxo.vout };
-            let payjoin =
-                payjoin.contribute_witness_input(txo_to_contribute, outpoint_to_contribute);
+            let mut selected_inputs = HashMap::new();
+            for outpoint in selected_outpoints {
+                let utxo = available_inputs
+                    .iter()
+                    .find(|i| i.txid == outpoint.txid && i.vout == outpoint.vout)
+                    .unwrap();
+                let txo = bitcoin::TxOut {
+                    value: utxo.amount,
+                    script_pubkey: utxo.script_pub_key.clone(),
+                };
+                selected_inputs.insert(outpoint, txo);
+            }
 
+            let payjoin = payjoin.contribute_witness_inputs(selected_inputs);
+
+            // Sign and finalize the proposal PSBT
             let payjoin_proposal = payjoin
                 .finalize_proposal(
                     |psbt: &Psbt| {
@@ -753,7 +754,7 @@ mod integration {
                 })
                 .expect("Receiver should have at least one output");
 
-            let payjoin = payjoin
+            let mut payjoin = payjoin
                 .try_substitute_receiver_outputs(None)
                 .expect("Could not substitute outputs");
 
@@ -764,23 +765,24 @@ mod integration {
                 .map(|i| (i.amount, OutPoint { txid: i.txid, vout: i.vout }))
                 .collect();
 
-            let selected_outpoint =
-                payjoin.try_preserving_privacy(candidate_inputs).expect("gg")[0];
-            let selected_utxo = available_inputs
-                .iter()
-                .find(|i| i.txid == selected_outpoint.txid && i.vout == selected_outpoint.vout)
-                .unwrap();
+            let selected_outpoints = payjoin.try_preserving_privacy(candidate_inputs).expect("gg");
 
-            //  calculate receiver payjoin outputs given receiver payjoin inputs and original_psbt,
-            let txo_to_contribute = bitcoin::TxOut {
-                value: selected_utxo.amount,
-                script_pubkey: selected_utxo.script_pub_key.clone(),
-            };
-            let outpoint_to_contribute =
-                bitcoin::OutPoint { txid: selected_utxo.txid, vout: selected_utxo.vout };
-            let payjoin =
-                payjoin.contribute_witness_input(txo_to_contribute, outpoint_to_contribute);
+            let mut selected_inputs = HashMap::new();
+            for outpoint in selected_outpoints {
+                let utxo = available_inputs
+                    .iter()
+                    .find(|i| i.txid == outpoint.txid && i.vout == outpoint.vout)
+                    .unwrap();
+                let txo = bitcoin::TxOut {
+                    value: utxo.amount,
+                    script_pubkey: utxo.script_pub_key.clone(),
+                };
+                selected_inputs.insert(outpoint, txo);
+            }
 
+            let payjoin = payjoin.contribute_witness_inputs(selected_inputs);
+
+            // Sign and finalize the proposal PSBT
             let payjoin_proposal = payjoin
                 .finalize_proposal(
                     |psbt: &Psbt| {

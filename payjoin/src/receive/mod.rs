@@ -397,6 +397,7 @@ impl WantsOutputs {
             payjoin_psbt,
             params: self.params,
             owned_vouts: self.owned_vouts,
+            change_amount: None,
         })
     }
 }
@@ -408,6 +409,8 @@ pub struct WantsInputs {
     payjoin_psbt: Psbt,
     params: Params,
     owned_vouts: Vec<usize>,
+    // Input excess value to be added back as change to a receiver output
+    change_amount: Option<Amount>,
 }
 
 impl WantsInputs {
@@ -420,7 +423,7 @@ impl WantsInputs {
     /// UIH "Unnecessary input heuristic" is avoided for two-output transactions.
     /// A simple consolidation is otherwise chosen if available.
     pub fn try_preserving_privacy(
-        &self,
+        &mut self,
         candidate_inputs: HashMap<Amount, OutPoint>,
     ) -> Result<Vec<OutPoint>, SelectionError> {
         if candidate_inputs.is_empty() {
@@ -438,26 +441,36 @@ impl WantsInputs {
     }
 
     fn do_coin_selection(
-        &self,
+        &mut self,
         candidate_inputs: HashMap<Amount, OutPoint>,
     ) -> Result<Vec<OutPoint>, SelectionError> {
         // Calculate the amount that the receiver must contribute
-        let output_amount =
-            self.payjoin_psbt.unsigned_tx.output.iter().fold(0, |acc, output| acc + output.value);
-        let original_output_amount =
-            self.original_psbt.unsigned_tx.output.iter().fold(0, |acc, output| acc + output.value);
-        let min_input_amount = min(0, output_amount - original_output_amount);
+        let output_amount = self
+            .payjoin_psbt
+            .unsigned_tx
+            .output
+            .iter()
+            .fold(Amount::ZERO, |acc, output| acc + output.value);
+        let original_output_amount = self
+            .original_psbt
+            .unsigned_tx
+            .output
+            .iter()
+            .fold(Amount::ZERO, |acc, output| acc + output.value);
+        let min_input_amount = min(Amount::ZERO, output_amount - original_output_amount);
 
         // Select inputs that can pay for that amount
         // TODO: use a better coin selection algorithm
         let mut selected_coins = vec![];
-        let mut input_sats = 0;
+        let mut input_sats = Amount::ZERO;
         for candidate in candidate_inputs {
-            let candidate_sats = candidate.0.to_sat();
+            let candidate_sats = candidate.0;
             selected_coins.push(candidate.1);
             input_sats += candidate_sats;
 
             if input_sats >= min_input_amount {
+                // TODO: this doesn't account for fees that might be needed to cover extra weight
+                self.change_amount = Some(input_sats - min_input_amount);
                 return Ok(selected_coins);
             }
         }
@@ -471,7 +484,7 @@ impl WantsInputs {
     // if min(in) > min(out) then UIH1 else UIH2
     // https://eprint.iacr.org/2022/589.pdf
     fn avoid_uih(
-        &self,
+        &mut self,
         candidate_inputs: HashMap<Amount, OutPoint>,
     ) -> Result<Vec<OutPoint>, SelectionError> {
         let min_original_out_sats = self
@@ -500,6 +513,7 @@ impl WantsInputs {
             if candidate_min_in > candidate_min_out {
                 // The candidate avoids UIH2 but conforms to UIH1: Optimal change heuristic.
                 // It implies the smallest output is the sender's change address.
+                self.change_amount = Some(candidate_sats);
                 return Ok(vec![candidate.1]);
             }
         }
@@ -509,17 +523,24 @@ impl WantsInputs {
     }
 
     fn select_first_candidate(
-        &self,
+        &mut self,
         candidate_inputs: HashMap<Amount, OutPoint>,
     ) -> Result<Vec<OutPoint>, SelectionError> {
-        match candidate_inputs.values().next().cloned() {
-            Some(outpoint) => Ok(vec![outpoint]),
+        match candidate_inputs.into_iter().next() {
+            Some((amount, outpoint)) => {
+                self.change_amount = Some(amount);
+                Ok(vec![outpoint])
+            }
             None => Err(SelectionError::from(InternalSelectionError::NotFound)),
         }
     }
 
-    pub fn contribute_witness_input(self, txo: TxOut, outpoint: OutPoint) -> ProvisionalProposal {
+    pub fn contribute_witness_inputs(
+        self,
+        inputs: HashMap<OutPoint, TxOut>,
+    ) -> ProvisionalProposal {
         let mut payjoin_psbt = self.payjoin_psbt.clone();
+
         // The payjoin proposal must not introduce mixed input sequence numbers
         let original_sequence = self
             .payjoin_psbt
@@ -529,26 +550,33 @@ impl WantsInputs {
             .map(|input| input.sequence)
             .unwrap_or_default();
 
-        // Add the value of new receiver input to receiver output
-        let txo_value = txo.value;
-        let vout_to_augment =
-            self.owned_vouts.choose(&mut rand::thread_rng()).expect("owned_vouts is empty");
-        payjoin_psbt.unsigned_tx.output[*vout_to_augment].value += txo_value;
+        // Add the receiver change amount to the receiver output, if applicable
+        if let Some(txo_value) = self.change_amount {
+            // TODO: ensure that owned_vouts only refers to outpoints actually owned by the
+            // receiver (e.g. not a forwarded payment)
+            let vout_to_augment =
+                self.owned_vouts.choose(&mut rand::thread_rng()).expect("owned_vouts is empty");
+            payjoin_psbt.unsigned_tx.output[*vout_to_augment].value += txo_value;
+        }
 
-        // Insert contribution at random index for privacy
+        // Insert contributions at random indices for privacy
         let mut rng = rand::thread_rng();
-        let index = rng.gen_range(0..=self.payjoin_psbt.unsigned_tx.input.len());
-        payjoin_psbt
-            .inputs
-            .insert(index, bitcoin::psbt::Input { witness_utxo: Some(txo), ..Default::default() });
-        payjoin_psbt.unsigned_tx.input.insert(
-            index,
-            bitcoin::TxIn {
-                previous_output: outpoint,
-                sequence: original_sequence,
-                ..Default::default()
-            },
-        );
+        for (outpoint, txo) in inputs.into_iter() {
+            let index = rng.gen_range(0..=self.payjoin_psbt.unsigned_tx.input.len());
+            payjoin_psbt.inputs.insert(
+                index,
+                bitcoin::psbt::Input { witness_utxo: Some(txo), ..Default::default() },
+            );
+            payjoin_psbt.unsigned_tx.input.insert(
+                index,
+                bitcoin::TxIn {
+                    previous_output: outpoint,
+                    sequence: original_sequence,
+                    ..Default::default()
+                },
+            );
+        }
+
         ProvisionalProposal {
             original_psbt: self.original_psbt,
             payjoin_psbt,
